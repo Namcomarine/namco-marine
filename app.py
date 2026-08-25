@@ -129,7 +129,7 @@ with st.sidebar:
 # --- GMAIL FETCHING FUNCTION ---
 def fetch_latest_email_attachment():
   USERNAME = "faisalnamco@gmail.com"  
-  PASSWORD = "ragg zvkh kzft kwix"  
+  PASSWORD = "glup jhez erez mura"  
 
   try:
     mail = imaplib.IMAP4_SSL("imap.gmail.com")
