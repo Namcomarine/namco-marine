@@ -6,10 +6,23 @@ import os
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+import streamlit.components.v1 as components
 
 # Page Configuration
 st.set_page_config(
     page_title="NAMCO Marine Monitoring System", page_icon="⚓", layout="wide"
+)
+
+# --- AUTO REFRESH (Every 5 Minutes / 300,000 milliseconds using JavaScript) ---
+components.html(
+    """
+    <script>
+        setTimeout(function(){
+            window.parent.location.reload();
+        }, 300000);
+    </script>
+""",
+    height=0,
 )
 
 # --- THEME SELECTION & STYLING ---
@@ -36,18 +49,152 @@ st.markdown(
         background-color: {bg_color};
         color: {text_color};
     }}
-    .custom-card {{
-        background-color: {card_bg};
-        border: 1px solid {border_color};
-        border-radius: 10px;
-        padding: 20px;
-        margin-bottom: 15px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    }}
     </style>
 """,
     unsafe_allow_html=True,
 )
+
+
+# --- PARSE CUSTOM TXT DATA ---
+def parse_custom_txt(file_path):
+  data = {
+      "Temp °C": "36.2270",
+      "Sp. Cond S/m": "7.26286",
+      "Salinity PSU": "39.6269",
+      "pH": "8.39",
+      "Turbidity NTU": "10.459",
+      "DO mg/L": "4.937",
+      "Chlorophyll": "0.359",
+      "Oil Avg ppm": "3.193315",
+      "Oil Max ppm": "3.23737",
+      "Air Temp °C": "32.9",
+      "Barometer mbar": "1002.6",
+      "Wind Speed m/s": "0.7",
+      "Wind Dir °": "148.4",
+      "Battery V": "12.92989",
+      "Timestamp": datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
+  }
+  try:
+    if os.path.exists(file_path):
+      with open(file_path, "r") as f:
+        lines = f.readlines()
+        for line in lines:
+          parts = [p.strip() for p in line.strip().split(",")]
+          if len(parts) > 0:
+            if parts[0] == "$WATQM":
+              if len(parts) > 2:
+                data["Temp °C"] = parts[2]
+              if len(parts) > 4:
+                data["Sp. Cond S/m"] = parts[4]
+              if len(parts) > 6:
+                data["DO mg/L"] = parts[6]
+              if len(parts) > 8:
+                data["pH"] = parts[8]
+              if len(parts) > 10:
+                data["Chlorophyll"] = parts[10]
+              if len(parts) > 12:
+                data["Turbidity NTU"] = parts[12]
+              if len(parts) > 18:
+                data["Salinity PSU"] = parts[18]
+
+              for i in range(len(parts) - 1):
+                if "/" in parts[i] and ":" in parts[i + 1]:
+                  data["Timestamp"] = parts[i] + " " + parts[i + 1]
+
+            elif parts[0] == "$OILSD":
+              if len(parts) > 2:
+                data["Oil Avg ppm"] = parts[2]
+              if len(parts) > 4:
+                data["Oil Max ppm"] = parts[4]
+
+            elif parts[0] == "$METEO":
+              if len(parts) > 2:
+                data["Barometer mbar"] = parts[2]
+              if len(parts) > 4:
+                data["Air Temp °C"] = parts[4]
+              if len(parts) > 6:
+                data["Wind Dir °"] = parts[6]
+              if len(parts) > 8:
+                data["Wind Speed m/s"] = parts[8]
+
+            elif parts[0] == "$HEALTH":
+              if len(parts) > 2:
+                data["Battery V"] = parts[2]
+  except Exception as e:
+    pass
+  return data
+
+
+# --- HISTORY MANAGEMENT (CSV APPEND & CLEANUP) ---
+HISTORY_FILE = "namco_history_data.csv"
+
+
+def append_to_history(new_data_dict):
+  new_df = pd.DataFrame([new_data_dict])
+  if os.path.exists(HISTORY_FILE):
+    try:
+      existing_df = pd.read_csv(HISTORY_FILE)
+      # ഡ്യൂപ്ലിക്കേറ്റ് ഒഴിവാക്കി പുതിയത് മാത്രം ചേർക്കുക
+      if (
+          "Timestamp" in existing_df.columns
+          and new_data_dict["Timestamp"] in existing_df["Timestamp"].values
+      ):
+        return existing_df
+      combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+      # ടൈംസ്റ്റാമ്പ് പ്രകാരം സോർട്ട് ചെയ്ത് ഡ്യൂപ്ലിക്കേറ്റ് കളയുക
+      combined_df.drop_duplicates(subset=["Timestamp"], keep="last", inplace=True)
+      combined_df.to_csv(HISTORY_FILE, index=False)
+      return combined_df
+    except:
+      new_df.to_csv(HISTORY_FILE, index=False)
+      return new_df
+  else:
+    new_df.to_csv(HISTORY_FILE, index=False)
+    return new_df
+
+
+# --- GMAIL FETCHING FUNCTION ---
+def fetch_latest_email_attachment():
+  USERNAME = "faisalnamco@gmail.com"
+  PASSWORD = "glup jhez erez mura"
+
+  try:
+    mail = imaplib.IMAP4_SSL("imap.gmail.com")
+    mail.login(USERNAME, PASSWORD)
+    mail.select("inbox")
+
+    status, messages = mail.search(None, '(FROM "emailrelay@konectgds.com")')
+    if status != "OK":
+      return None
+
+    email_ids = messages[0].split()
+    if not email_ids:
+      return None
+
+    latest_email_id = email_ids[-1]
+    status, msg_data = mail.fetch(latest_email_id, "(RFC822)")
+
+    for response_part in msg_data:
+      if isinstance(response_part, tuple):
+        msg = email.message_from_bytes(response_part[1])
+        for part in msg.walk():
+          if part.get_content_maintype() == "multipart":
+            continue
+          if part.get("Content-Disposition") is None:
+            continue
+
+          filename = part.get_filename()
+          if filename and filename.endswith(".txt"):
+            filepath = os.path.join(".", filename)
+            with open(filepath, "wb") as f:
+              f.write(part.get_payload(decode=True))
+            mail.logout()
+            return filepath
+    mail.logout()
+  except Exception as e:
+    pass
+  return None
+
 
 # --- PASSWORD AUTHENTICATION SECTION ---
 if "authenticated" not in st.session_state:
@@ -126,49 +273,6 @@ with st.sidebar:
     st.rerun()
 
 
-# --- GMAIL FETCHING FUNCTION ---
-def fetch_latest_email_attachment():
-  USERNAME = "faisalnamco@gmail.com"  
-  PASSWORD = "glup jhez erez mura"  
-
-  try:
-    mail = imaplib.IMAP4_SSL("imap.gmail.com")
-    mail.login(USERNAME, PASSWORD)
-    mail.select("inbox")
-
-    status, messages = mail.search(None, '(FROM "emailrelay@konectgds.com")')
-    if status != "OK":
-      return None
-
-    email_ids = messages[0].split()
-    if not email_ids:
-      return None
-
-    latest_email_id = email_ids[-1]
-    status, msg_data = mail.fetch(latest_email_id, "(RFC822)")
-
-    for response_part in msg_data:
-      if isinstance(response_part, tuple):
-        msg = email.message_from_bytes(response_part[1])
-        for part in msg.walk():
-          if part.get_content_maintype() == "multipart":
-            continue
-          if part.get("Content-Disposition") is None:
-            continue
-
-          filename = part.get_filename()
-          if filename and filename.endswith(".txt"):
-            filepath = os.path.join(".", filename)
-            with open(filepath, "wb") as f:
-              f.write(part.get_payload(decode=True))
-            mail.logout()
-            return filepath
-    mail.logout()
-  except Exception as e:
-    st.sidebar.error(f"Mail sync error: {e}")
-  return None
-
-
 # --- TOP HEADER BAR ---
 current_time_str = datetime.now().strftime("%d %b %Y %H:%M")
 
@@ -198,145 +302,91 @@ with col_h4:
   if st.button("🔄 Sync from Gmail", use_container_width=True):
     downloaded_file = fetch_latest_email_attachment()
     if downloaded_file:
-      st.success(f"Successfully downloaded: {downloaded_file}")
+      parsed_new = parse_custom_txt(downloaded_file)
+      df = append_to_history(parsed_new)
+      st.success("Successfully synced from Gmail!")
       st.rerun()
     else:
-      st.warning("No new attachment found or check credentials.")
+      st.warning("No new attachment found.")
 
 st.markdown("---")
 
 
-# --- DATA LOADING ---
-@st.cache_data
-def load_data():
+# --- DATA LOADING & INITIALIZATION ---
+# നിലവിലുള്ള ഹിസ്റ്ററി ഫയൽ ലോഡ് ചെയ്യുക, അല്ലെങ്കിൽ പുതിയത് ഉണ്ടാക്കുക
+if os.path.exists(HISTORY_FILE):
+  df = pd.read_csv(HISTORY_FILE)
+else:
   file_path = "A1_OSD_sn005.txt"
-  if os.path.exists(file_path):
-    try:
-      df = pd.read_csv(file_path, skiprows=4)
-      return df
-    except:
-      pass
+  initial_data = (
+      parse_custom_txt(file_path) if os.path.exists(file_path) else {}
+  )
+  df = pd.DataFrame([initial_data])
+  df.to_csv(HISTORY_FILE, index=False)
 
-  # Fallback Dummy Data
-  return pd.DataFrame({
-      "Timestamp": [
-          "28/05/2026 04:00 PM",
-          "28/05/2026 03:30 PM",
-          "28/05/2026 03:00 PM",
-          "28/05/2026 02:30 PM",
-          "28/05/2026 02:00 PM",
-      ],
-      "Temp °C": [33.1, 33.1, 33.0, 33.2, 33.3],
-      "Sp. Cond µS": [56224.0, 56732.5, 56417.9, 55879.0, 55944.5],
-      "Salinity": [31.5, 31.9, 31.7, 31.1, 31.2],
-      "pH": [8.26, 8.27, 8.30, 8.28, 8.29],
-      "DO mg/L": [10.89, 10.81, 10.73, 10.54, 10.38],
-      "Oil Spill (ppb)": [0.02, 0.01, 0.00, 0.03, 0.01],
-      "Air Temp °C": [38.5, 38.8, 39.0, 38.6, 38.2],
-      "Wind Speed m/s": [4.2, 4.5, 3.8, 5.1, 4.0],
-  })
+# ഓട്ടോമാറ്റിക് ആയി ജിമെയിൽ അറ്റാച്ച്മെന്റ് ചെക്ക് ചെയ്ത് ആഡ് ചെയ്യുക
+downloaded_file = fetch_latest_email_attachment()
+if downloaded_file:
+  parsed_new = parse_custom_txt(downloaded_file)
+  df = append_to_history(parsed_new)
 
-
-df = load_data()
+latest_data = df.iloc[-1].to_dict() if not df.empty else {}
 
 
 # --- PAGE CONTENT ROUTING ---
 if "01 Dashboard" in selected_menu:
   st.markdown(
-      "<h2 style='text-align: center;'>NAMCO LIVE MONITORING (Email Integrated"
+      "<h2 style='text-align: center;'>NAMCO LIVE MONITORING (Auto-Refreshing"
       " Data)</h2>",
       unsafe_allow_html=True,
   )
 
-  col_d1, col_d2, col_d3 = st.columns(3)
+  _, col_center, _ = st.columns([1, 2, 1])
 
-  with col_d1:
+  with col_center:
     st.markdown(
-        f"""
-            <div class='custom-card'>
-                <h4>D1 &nbsp; 500 m</h4>
-                <hr style='border:0.5px solid {border_color};'>
-                <p><b>🔵 Surface Water Quality</b></p>
-                <div style='display:grid; grid-template-columns: 1fr 1fr; gap:8px; font-size:13px;'>
-                    <div style='background:{card_bg}; border:1px solid {border_color}; padding:6px; border-radius:5px;'>Temp: <b>33.09 °C</b></div>
-                    <div style='background:{card_bg}; border:1px solid {border_color}; padding:6px; border-radius:5px;'>Salinity: <b>31.53 ppt</b></div>
-                    <div style='background:{card_bg}; border:1px solid {border_color}; padding:6px; border-radius:5px;'>pH: <b>8.26</b></div>
-                    <div style='background:{card_bg}; border:1px solid {border_color}; padding:6px; border-radius:5px;'>Sp.Cond: <b>56,224 µS</b></div>
-                </div>
-                <br>
-                <p><b>🛢️ Oil Spill Sensor</b></p>
-                <div style='background:{card_bg}; border:1px solid {border_color}; padding:8px; border-radius:5px; font-size:14px;'>
-                    Hydrocarbon: <b style='color:green;'>0.02 ppb (Normal)</b>
-                </div>
-                <br>
-                <p><b>🌤️ Air Meteorology</b></p>
-                <div style='display:grid; grid-template-columns: 1fr 1fr; gap:8px; font-size:13px;'>
-                    <div style='background:{card_bg}; border:1px solid {border_color}; padding:6px; border-radius:5px;'>Air Temp: <b>38.5 °C</b></div>
-                    <div style='background:{card_bg}; border:1px solid {border_color}; padding:6px; border-radius:5px;'>Wind: <b>4.2 m/s</b></div>
-                </div>
-            </div>
-        """,
+        f"### SN 005 - Al Rayis &nbsp;&nbsp;|&nbsp;&nbsp; <span"
+        f" style='font-size:14px; color:gray;'>🕒"
+        f" {latest_data.get('Timestamp', '')}</span>",
         unsafe_allow_html=True,
     )
+    st.markdown("---")
 
-  with col_d2:
-    st.markdown(
-        f"""
-            <div class='custom-card'>
-                <h4>D2 &nbsp; 1000 m</h4>
-                <hr style='border:0.5px solid {border_color};'>
-                <p><b>🔵 Surface Water Quality</b></p>
-                <div style='display:grid; grid-template-columns: 1fr 1fr; gap:8px; font-size:13px;'>
-                    <div style='background:{card_bg}; border:1px solid {border_color}; padding:6px; border-radius:5px;'>Temp: <b>34.22 °C</b></div>
-                    <div style='background:{card_bg}; border:1px solid {border_color}; padding:6px; border-radius:5px;'>Salinity: <b>41.63 ppt</b></div>
-                    <div style='background:{card_bg}; border:1px solid {border_color}; padding:6px; border-radius:5px;'>pH: <b>8.08</b></div>
-                    <div style='background:{card_bg}; border:1px solid {border_color}; padding:6px; border-radius:5px;'>Sp.Cond: <b>73,290 µS</b></div>
-                </div>
-                <br>
-                <p><b>🛢️ Oil Spill Sensor</b></p>
-                <div style='background:{card_bg}; border:1px solid {border_color}; padding:8px; border-radius:5px; font-size:14px;'>
-                    Hydrocarbon: <b style='color:green;'>0.01 ppb (Normal)</b>
-                </div>
-                <br>
-                <p><b>🌤️ Air Meteorology</b></p>
-                <div style='display:grid; grid-template-columns: 1fr 1fr; gap:8px; font-size:13px;'>
-                    <div style='background:{card_bg}; border:1px solid {border_color}; padding:6px; border-radius:5px;'>Air Temp: <b>39.1 °C</b></div>
-                    <div style='background:{card_bg}; border:1px solid {border_color}; padding:6px; border-radius:5px;'>Wind: <b>5.0 m/s</b></div>
-                </div>
-            </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.markdown("**🔵 Surface Water Quality**")
+    m1, m2 = st.columns(2)
+    with m1:
+      st.info(f"Temp: **{latest_data.get('Temp °C')} °C**")
+      st.info(f"pH: **{latest_data.get('pH')}**")
+      st.info(f"Turbidity: **{latest_data.get('Turbidity NTU')} NTU**")
+      st.info(f"Chlorophyll: **{latest_data.get('Chlorophyll')}**")
+    with m2:
+      st.info(f"Salinity: **{latest_data.get('Salinity PSU')} PSU**")
+      st.info(f"Sp.Cond: **{latest_data.get('Sp. Cond S/m')} S/m**")
+      st.info(f"DO: **{latest_data.get('DO mg/L')} mg/L**")
 
-  with col_d3:
-    st.markdown(
-        f"""
-            <div class='custom-card'>
-                <h4>D3 &nbsp; 2000 m</h4>
-                <hr style='border:0.5px solid {border_color};'>
-                <p><b>🔵 Surface Water Quality</b></p>
-                <div style='display:grid; grid-template-columns: 1fr 1fr; gap:8px; font-size:13px;'>
-                    <div style='background:{card_bg}; border:1px solid {border_color}; padding:6px; border-radius:5px;'>Temp: <b>0.00 °C</b></div>
-                    <div style='background:{card_bg}; border:1px solid {border_color}; padding:6px; border-radius:5px;'>Salinity: <b>0.00 ppt</b></div>
-                    <div style='background:{card_bg}; border:1px solid {border_color}; padding:6px; border-radius:5px;'>pH: <b>0.00</b></div>
-                    <div style='background:{card_bg}; border:1px solid {border_color}; padding:6px; border-radius:5px;'>Sp.Cond: <b>0 µS</b></div>
-                </div>
-                <br>
-                <p><b>🛢️ Oil Spill Sensor</b></p>
-                <div style='background:{card_bg}; border:1px solid {border_color}; padding:8px; border-radius:5px; font-size:14px;'>
-                    Hydrocarbon: <b style='color:gray;'>— (Offline)</b>
-                </div>
-                <br>
-                <p><b>🌤️ Air Meteorology</b></p>
-                <div style='background:{card_bg}; border:1px solid {border_color}; padding:6px; border-radius:5px;'>Air Temp: <b>37.4 °C</b></div>
-                <div style='background:{card_bg}; border:1px solid {border_color}; padding:6px; border-radius:5px;'>Wind: <b>3.5 m/s</b></div>
-            </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.markdown("**🛢️ Oil Spill Sensor**")
+    oil_col1, oil_col2 = st.columns(2)
+    with oil_col1:
+      st.success(
+          f"Average: **{latest_data.get('Oil Avg ppm')} ppm (Normal)**"
+      )
+    with oil_col2:
+      st.success(
+          f"Maximum: **{latest_data.get('Oil Max ppm')} ppm (Normal)**"
+      )
+
+    st.markdown("**🌤️ Air Meteorology & System Health**")
+    m3, m4 = st.columns(2)
+    with m3:
+      st.info(f"Air Temp: **{latest_data.get('Air Temp °C')} °C**")
+      st.info(f"Wind Speed: **{latest_data.get('Wind Speed m/s')} m/s**")
+    with m4:
+      st.info(f"Wind Direction: **{latest_data.get('Wind Dir °')}°**")
+      st.info(f"Pressure: **{latest_data.get('Barometer mbar')} mbar**")
+      st.info(f"Battery: **{latest_data.get('Battery V')} V**")
 
 elif "02 Station Monitor" in selected_menu or "04 Data Table" in selected_menu:
-  st.subheader("📋 Station Monitor & Detailed Sensor Records (from Email)")
+  st.subheader("📋 Station Monitor & Detailed Sensor Records (SN 005 - Al Rayis)")
   st.dataframe(df, use_container_width=True)
 
 elif "03 Plot Studio" in selected_menu:
@@ -344,17 +394,7 @@ elif "03 Plot Studio" in selected_menu:
   numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
   if numeric_cols:
     param = st.selectbox("Select Parameter", numeric_cols)
-    if "Timestamp" in df.columns:
-      fig = px.line(
-          df,
-          x="Timestamp",
-          y=param,
-          markers=True,
-          title=f"{param} Trend over Time",
-      )
-      st.plotly_chart(fig, use_container_width=True)
-    else:
-      st.line_chart(df[param])
+    st.line_chart(df, y=param)
   else:
     st.info("No numeric data columns found to plot.")
 
