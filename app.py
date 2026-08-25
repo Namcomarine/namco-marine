@@ -73,10 +73,16 @@ if not st.session_state.authenticated:
   st.stop()
 
 
-# --- SIDEBAR NAVIGATION (R-View Style) ---
+# --- SIDEBAR NAVIGATION (With Uploaded Logo) ---
 with st.sidebar:
+  try:
+    st.image("Picture1-Picsart-BackgroundRemover.png", width=140)
+  except:
+    pass
+
   st.markdown(
-      "### ⚓ **NAMCO**\n<p style='color:gray; font-size:12px;'>Marine"
+      "<p"
+      " style='color:gray; font-size:11px; margin-top:-5px;'>NAMCO Marine"
       " Monitoring Platform</p>",
       unsafe_allow_html=True,
   )
@@ -125,7 +131,6 @@ with col_h2:
       unsafe_allow_html=True,
   )
 with col_h3:
-  # Theme Toggle Button
   theme_label = (
       "🌙 Dark theme" if st.session_state.theme == "Light" else "☀️ Light theme"
   )
@@ -169,19 +174,6 @@ df = load_data()
 if "01 Dashboard" in selected_menu:
   st.markdown(
       "<h2 style='text-align: center;'>NAMCO LIVE MONITORING</h2>",
-      unsafe_allow_html=True,
-  )
-
-  # Station Tabs selection
-  st.markdown(
-      "<div style='display:flex; gap:10px; margin-bottom:20px;'>"
-      "<button style='background:#0284c7; color:white; border:none;"
-      " padding:8px 20px; border-radius:5px;'>NAMCO_500</button>"
-      "<button style='background:transparent; border:1px solid"
-      " gray; padding:8px 20px; border-radius:5px;'>NAMCO_1000</button>"
-      "<button style='background:transparent; border:1px solid"
-      " gray; padding:8px 20px; border-radius:5px;'>NAMCO_2000</button>"
-      "</div>",
       unsafe_allow_html=True,
   )
 
